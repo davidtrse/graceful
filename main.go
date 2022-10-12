@@ -1,10 +1,9 @@
 package main
 
-import (
-	"github.com/davidtrse/graceful/server"
-)
+import "github.com/davidtrse/graceful/server"
 
 func main() {
-
-	server.Run()
+	// server.Run()
+	// tus.Run()
+	server.Start()
 }

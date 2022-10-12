@@ -1,178 +1,231 @@
 package tus
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"os/user"
-	"path"
-	"strconv"
-	"strings"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	_ "github.com/lib/pq"
+
+	"github.com/tus/tusd/pkg/filestore"
+	tusd "github.com/tus/tusd/pkg/handler"
 )
 
-const dirName = "fileserver"
+const (
+	dirPath = "./upload"
+	dirName = "tusSave"
+)
 
-type fileHandler struct {
-	db      *sql.DB
-	dirPath string
-}
+func Run() {
+	isTUSDone := make(chan bool, 1)
+	isTUSProcessing := make(chan bool, 1)
 
-type file struct {
-	fileID         int
-	offset         *int
-	uploadLength   int
-	uploadComplete *bool
-}
+	log.Println("TUS Server started")
+	// Create a new FileStore instance which is responsible for
+	// storing the uploaded file on disk in the specified directory.
+	// This path _must_ exist before tusd will store uploads in it.
+	// If you want to save them on a different medium, for example
+	// a remote FTP server, you can implement your own storage backend
+	// by implementing the tusd.DataStore interface.
+	store := filestore.FileStore{
+		Path: dirPath,
+	}
 
-func (fh fileHandler) File(fileID string) (file, error) {
-	fID, err := strconv.Atoi(fileID)
+	// A storage backend for tusd may consist of multiple different parts which
+	// handle upload creation, locking, termination and so on. The composer is a
+	// place where all those separated pieces are joined together. In this example
+	// we only use the file store but you may plug in multiple.
+	composer := tusd.NewStoreComposer()
+	store.UseIn(composer)
+
+	// Create a new HTTP handler for the tusd server by providing a configuration.
+	// The StoreComposer property must be set to allow the handler to function.
+	handler, err := tusd.NewHandler(tusd.Config{
+		BasePath:              "/files/",
+		StoreComposer:         composer,
+		NotifyCompleteUploads: true,
+		PreUploadCreateCallback: func(hook tusd.HookEvent) error {
+			isTUSProcessing <- true
+			return nil
+		},
+		PreFinishResponseCallback: func(hook tusd.HookEvent) error {
+			fmt.Println("Pre-create create handler success")
+			return nil
+		},
+	})
 	if err != nil {
-		log.Println("Unable to convert fileID to string", err)
-		return file{}, err
-	}
-	log.Println("going to query for fileID", fID)
-	gfstmt := `select file_id, file_offset, file_upload_length, file_upload_complete from file where file_id = $1`
-	row := fh.db.QueryRow(gfstmt, fID)
-	f := file{}
-	err = row.Scan(&f.fileID, &f.offset, &f.uploadLength, &f.uploadComplete)
-	if err != nil {
-		log.Println("error while fetching file", err)
-		return file{}, err
-	}
-	return f, nil
-}
-
-func (fh fileHandler) fileDetailsHandler(e echo.Context) {
-	fID := e.Param("tusID")
-	file, err := fh.File(fID)
-	if err != nil {
-		e.Response().WriteHeader(http.StatusNotFound)
-		return
-	}
-	log.Println("going to write upload offset to output")
-	e.Response().Header().Set("Upload-Offset", strconv.Itoa(*file.offset))
-	e.Response().WriteHeader(http.StatusOK)
-	return
-}
-
-func (fh fileHandler) createFileHandler(e echo.Context) {
-	ul, err := strconv.Atoi(e.Request().Header.Get("Upload-Length"))
-	if err != nil {
-		er := "Improper upload length"
-		log.Printf("%s %s", er, err)
-		e.Response().WriteHeader(http.StatusBadRequest)
-		e.Response().Write([]byte(er))
-		return
-	}
-	log.Printf("upload length %d\n", ul)
-	io := 0
-	uc := false
-	f := file{
-		offset:         &io,
-		uploadLength:   ul,
-		uploadComplete: &uc,
-	}
-	fileID, err := fh.createFile(f)
-	if err != nil {
-		er := "Error creating file in DB"
-		log.Printf("%s %s\n", er, err)
-		e.Response().WriteHeader(http.StatusInternalServerError)
-		return
+		panic(fmt.Errorf("Unable to create handler: %s", err))
 	}
 
-	filePath := path.Join(fh.dirPath, fileID)
-	file, err := os.Create(filePath)
-	if err != nil {
-		er := "Error creating file in filesystem"
-		log.Printf("%s %s\n", er, err)
-		e.Response().WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-	e.Response().Header().Set("Location", fmt.Sprintf("localhost:8080/files/%s", fileID))
-	e.Response().WriteHeader(http.StatusCreated)
-	return
-}
-
-func (fh fileHandler) createTable() error {
-	q := `CREATE TABLE IF NOT EXISTS file(file_id SERIAL PRIMARY KEY, 
-           file_offset INT NOT NULL, file_upload_length INT NOT NULL, file_upload_complete BOOLEAN NOT NULL, 
-          created_at TIMESTAMP default NOW() NOT NULL, modified_at TIMESTAMP default NOW() NOT NULL)`
-	_, err := fh.db.Exec(q)
-	if err != nil {
-		return err
-	}
-	log.Println("table create successfully")
-	return nil
-}
-
-func (fh fileHandler) createFile(f file) (string, error) {
-	cfstmt := `INSERT INTO file(file_offset, file_upload_length, file_upload_complete) VALUES($1, $2, $3) RETURNING file_id`
-	fileID := 0
-	err := fh.db.QueryRow(cfstmt, f.offset, f.uploadLength, f.uploadComplete).Scan(&fileID)
-	if err != nil {
-		return "", err
-	}
-	fid := strconv.Itoa(fileID)
-	return fid, nil
-}
-
-func (fh fileHandler) updateFile(f file) error {
-	var query []string
-	var param []interface{}
-	if f.offset != nil {
-		of := fmt.Sprintf("file_offset = $1")
-		ofp := f.offset
-		query = append(query, of)
-		param = append(param, ofp)
-	}
-	if f.uploadComplete != nil {
-		uc := fmt.Sprintf("file_upload_complete = $2")
-		ucp := f.uploadComplete
-		query = append(query, uc)
-		param = append(param, ucp)
-	}
-
-	if len(query) > 0 {
-		mo := "modified_at = $3"
-		mop := "NOW()"
-
-		query = append(query, mo)
-		param = append(param, mop)
-
-		qj := strings.Join(query, ",")
-
-		sqlq := fmt.Sprintf("UPDATE file SET %s WHERE file_id = $4", qj)
-
-		param = append(param, f.fileID)
-
-		log.Println("generated update query", sqlq)
-		_, err := fh.db.Exec(sqlq, param...)
-
-		if err != nil {
-			log.Println("Error during file update", err)
-			return err
+	// Start another goroutine for receiving events from the handler whenever
+	// an upload is completed. The event will contains details about the upload
+	// itself and the relevant HTTP request.
+	go func() {
+		for {
+			event := <-handler.CompleteUploads
+			fmt.Printf("Upload %s finished\n", event.Upload.ID)
+			isTUSDone <- true
 		}
+	}()
+
+	e := echo.New()
+
+	cors := middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		// AllowMethods: []string{
+		// 	http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete,
+		// 	http.MethodPatch, http.MethodHead, http.MethodOptions},
+		// AllowHeaders: []string{
+		// 	echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept,
+		// 	echo.HeaderAuthorization, echo.HeaderAccessControlExposeHeaders,
+		// 	"Location", "X-Requested-With", "X-Request-ID",
+		// 	"X-HTTP-Method-Override", "Upload-Defer-Length",
+		// 	"Tus-Resumable", "Tus-Max-Size", "Tus-Extension",
+		// 	"upload-length", "upload-metadata", "upload-offset",
+		// 	"upload-concat", "Redirect"},
+		// ExposeHeaders: []string{
+		// 	"Upload-Offset", "Location", "Upload-Length", "Tus-Version",
+		// 	"Tus-Resumable", "Tus-Max-Size", "Tus-Extension", "Upload-Metadata",
+		// 	"Upload-Defer-Length", "Upload-Concat"},
+		MaxAge: 3600,
+	})
+	e.Use(cors)
+
+	e.OPTIONS("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.ServeHTTP)), echo.WrapMiddleware(tusmiddleware))
+	e.POST("/files", echo.WrapHandler(http.HandlerFunc(handler.PostFile)), echo.WrapMiddleware(tusmiddleware))
+	e.HEAD("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.HeadFile)), echo.WrapMiddleware(tusmiddleware))
+	e.PATCH("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.PatchFile)), echo.WrapMiddleware(tusmiddleware))
+	e.GET("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.GetFile)))
+	e.GET("/", hello)
+	// Start server in dedicated go routine
+	go func() {
+		if err := e.Start(":8180"); err != nil {
+			if err != nil && err != http.ErrServerClosed {
+				e.Logger.Errorf("shutting down the server..., err=%s", err)
+			} else {
+				e.Logger.Info("Server terminated...")
+			}
+		}
+	}()
+
+	// GRACEFUL SHUTDOWN
+	// Wait for interrupt signal to gracefully shutdown the server.
+	// Use a buffered channel to avoid missing signals as recommended for signal.Notify
+	quitChan := make(chan bool, 1)
+	isOSExist := make(chan os.Signal, 1)
+	signal.Notify(
+		isOSExist,
+		syscall.SIGHUP,  // kill - SIGHUP XXXX
+		syscall.SIGINT,  // kill - SIGIN XXXX or Ctrl + C
+		syscall.SIGQUIT, // kill - SIGQUICT XXXX
+	)
+	isOk := make(chan bool, 1)
+d:
+	for {
+		select {
+		case <-isOSExist:
+			isOk <- true
+		case <-isOk:
+			select {
+			case <-isTUSProcessing:
+				select {
+				case <-isTUSDone:
+					fmt.Println("isTUSDone=true")
+					quitChan <- true
+					break d
+				default:
+					isTUSProcessing <- true
+					isOk <- true
+				}
+			default:
+				fmt.Println("isOSExisting=true")
+				quitChan <- true
+				break d
+			}
+		default:
+			fmt.Println("inprogress...")
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	<-quitChan
+	fmt.Println("====> Graceful shutdowning...")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := e.Shutdown(ctx); err != nil {
+		e.Logger.Fatal(err)
+	} else {
+		fmt.Println("===> Server exited graceful.")
+	}
+}
+
+func hello(echo echo.Context) error {
+	for i := 0; i < 10; i++ {
+		fmt.Println(i)
+		time.Sleep(1 * time.Second)
+	}
+	echo.Response().Write([]byte("Ok"))
 	return nil
 }
 
-func createFileDir() (string, error) {
-	u, err := user.Current()
-	if err != nil {
-		log.Println("Error while fetching user home directory", err)
-		return "", err
-	}
-	home := u.HomeDir
-	dirPath := path.Join(home, dirName)
-	err = os.MkdirAll(dirPath, 0744)
-	if err != nil {
-		log.Println("Error while creating file server directory", err)
-		return "", err
-	}
-	return dirPath, nil
+func tusmiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow overriding the HTTP method. The reason for this is
+		// that some libraries/environments to not support PATCH and
+		// DELETE requests, e.g. Flash in a browser and parts of Java
+		if newMethod := r.Header.Get("X-HTTP-Method-Override"); newMethod != "" {
+			r.Method = newMethod
+		}
+
+		header := w.Header()
+
+		if origin := r.Header.Get("Origin"); origin != "" {
+			header.Set("Access-Control-Allow-Origin", origin)
+
+			if r.Method == "OPTIONS" {
+				allowedMethods := "POST, HEAD, PATCH, OPTIONS"
+
+				// Preflight request
+				header.Add("Access-Control-Allow-Methods", allowedMethods)
+				header.Add("Access-Control-Allow-Headers", "Authorization, Origin, X-Requested-With, X-Request-ID, X-HTTP-Method-Override, Content-Type, Upload-Length, Upload-Offset, Tus-Resumable, Upload-Metadata, Upload-Defer-Length, Upload-Concat")
+				header.Set("Access-Control-Max-Age", "86400")
+
+			} else {
+				// Actual request
+				header.Add("Access-Control-Expose-Headers", "Upload-Offset, Location, Upload-Length, Tus-Version, Tus-Resumable, Tus-Max-Size, Tus-Extension, Upload-Metadata, Upload-Defer-Length, Upload-Concat")
+			}
+		}
+
+		// Set current version used by the server
+		header.Set("Tus-Resumable", "1.0.0")
+
+		// Add nosniff to all responses https://golang.org/src/net/http/server.go#L1429
+		header.Set("X-Content-Type-Options", "nosniff")
+
+		// Set appropriated headers in case of OPTIONS method allowing protocol
+		// discovery and end with an 204 No Content
+		if r.Method == "OPTIONS" {
+			header.Add("Access-Control-Allow-Origins", "*")
+		}
+
+		// Test if the version sent by the client is supported
+		// GET and HEAD methods are not checked since a browser may visit this URL and does
+		// not include this header. GET requests are not part of the specification.
+		if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Tus-Resumable") != "1.0.0" {
+			return
+		}
+
+		// Proceed with routing the request
+		h.ServeHTTP(w, r)
+	})
 }
