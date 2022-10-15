@@ -41,15 +41,21 @@ func IsNotEmpty(msg kafka.Message) bool {
 }
 
 type KafkaManager struct {
-	Config   *KafkaConfig
-	Context  context.Context
+	Config  *KafkaConfig
+	Context context.Context
+	Brokers []string
+	Topics  []string
+	GroupId string
+	Readers map[string]*kafka.Reader
+	Writer  *kafka.Writer
+	// IsClosed was setted as soon as receiving terminated signal
+	// Do not read more message if IsClose equal true
 	IsClosed bool
-	Brokers  []string
-	Topics   []string
-	GroupId  string
-	Readers  map[string]*kafka.Reader
-	Writer   *kafka.Writer
-	Keeping  bool
+
+	// KeepRunning was setted as soon as start new transcode times
+	// and reverted after the new message was processed.
+	// KeepRunning be used to whether can stop transcode service or not
+	KeepRunning bool
 }
 
 var (
@@ -216,15 +222,15 @@ func (this *KafkaManager) Close() {
 }
 
 func (this *KafkaManager) Start() {
-	this.Keeping = true
+	this.KeepRunning = true
 }
 
 func (this *KafkaManager) Done() {
-	this.Keeping = false
+	this.KeepRunning = false
 }
 
 func (this *KafkaManager) IsDone() bool {
-	return !this.Keeping
+	return !this.KeepRunning
 }
 
 func logf(msg string, a ...interface{}) {
