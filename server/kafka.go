@@ -17,9 +17,9 @@ import (
 func Start() {
 	quit := make(chan bool, 1)
 	isTranscodeDone := make(chan bool, 1)
-	isTranscodeStart := make(chan bool, 1)
+	keepRunning := make(chan bool, 1)
 	InitKafka()
-	go mainLoop(isTranscodeDone, isTranscodeStart)
+	go mainLoop(isTranscodeDone, keepRunning)
 
 	// catch the signal
 	existOSsignal := make(chan os.Signal, 1)
@@ -42,13 +42,14 @@ d:
 				break d
 			case <-ctx.Done():
 				quit <- true
+				fmt.Println("ctx.Done=true...")
 				break d
-			case <-isTranscodeStart:
-				fmt.Println("isTranscodeStart=true...")
-				isTranscodeStart <- true
+			case <-keepRunning:
+				fmt.Println("keepRunning=true...")
+				keepRunning <- true
 				wait <- true
 			default:
-				fmt.Println("isOk=true...")
+				fmt.Println("wait=true...")
 				quit <- true
 				break d
 			}
@@ -81,12 +82,12 @@ func InitKafka() {
 	}
 }
 
-func mainLoop(isTranscodeDone chan bool, isTranscodeStart chan bool) {
+func mainLoop(isTranscodeDone chan bool, keepRunning chan bool) {
 	for {
 		msg, err := app.Instance.KafkaManager.ReadMessage("")
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("Stopped reading message...")
+				fmt.Println("Read message error. Reader is closed")
 				break
 			}
 
@@ -94,9 +95,10 @@ func mainLoop(isTranscodeDone chan bool, isTranscodeStart chan bool) {
 			continue
 		}
 
-		if string(msg.Value) == "M" {
-			isTranscodeStart <- true
-			fmt.Println("M..")
+		// if receive message is "Big", will sleep 5 second while loop and print 1-5
+		if string(msg.Value) == "Big" {
+			keepRunning <- true
+			fmt.Println("Big.....")
 			for i := 0; i < 5; i++ {
 				fmt.Println(i)
 				time.Sleep(1 * time.Second)

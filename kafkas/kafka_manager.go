@@ -20,7 +20,7 @@ type IKafkaManager interface {
 	ReadMessage(topic string) (kafka.Message, error)
 	WriteMessage(topic string, key []byte, value []byte) error
 	WriteMessageWithHeader(topic string, key []byte, value []byte, headerName string, headerValue string) error
-	StopConsumer()
+	StopReadMessage()
 	StopWriteMessage()
 }
 
@@ -182,16 +182,16 @@ func (this *KafkaManager) WriteMessageWithHeader(topic string, key []byte, value
 
 func (this *KafkaManager) StopWriteMessage() {
 	if this.Writer != nil {
-		fmt.Println("StopWriteMessage...")
+		fmt.Println("Closing writer...")
 		this.Writer.Close()
 		this.Writer = nil
 	}
 }
 
-func (this *KafkaManager) StopConsumer() {
+func (this *KafkaManager) StopReadMessage() {
 	if this.Readers != nil {
 		for _, r := range this.Readers {
-			fmt.Println("StopConsumer...")
+			fmt.Println("Closing reader...")
 			r.Close()
 		}
 		this.Readers = nil
