@@ -78,7 +78,7 @@ func Run() {
 		for {
 			event := <-handler.CreatedUploads
 			fmt.Printf("Upload %s created\n", event.Upload.ID)
-			app.Instance.GracefulTUSManager.StartNewTUS(event.Upload.ID)
+			app.Instance.GracefulTUSManager.StartNewUpload(event.Upload.ID)
 		}
 	}()
 
@@ -89,7 +89,7 @@ func Run() {
 		for {
 			event := <-handler.CompleteUploads
 			fmt.Printf("Upload %s finished\n", event.Upload.ID)
-			app.Instance.GracefulTUSManager.DoneTUS(event.Upload.ID)
+			app.Instance.GracefulTUSManager.DoneUpload(event.Upload.ID)
 		}
 	}()
 
