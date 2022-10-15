@@ -66,6 +66,7 @@ func Run() {
 					fmt.Println("isOSExist")
 				}
 				isOk <- true
+			case <-tusDone:
 			default:
 				fmt.Println("inprogress...")
 			}

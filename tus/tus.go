@@ -149,11 +149,19 @@ d:
 				quitChan <- true
 				break d
 			}
+		case a, ok := <-isTUSProcessing:
+			if ok {
+				fmt.Println("isTUSProcessing", a)
+			}
+		case a, ok := <-isTUSDone:
+			if ok {
+				fmt.Println("isTUSDone", a)
+			}
 		default:
 			fmt.Println("inprogress...")
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 	}
 
 	<-quitChan
