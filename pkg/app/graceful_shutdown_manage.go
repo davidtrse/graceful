@@ -16,8 +16,8 @@ const (
 )
 
 type GracefulTUSManager interface {
-	StartNewTUS(string)
-	DoneTUS(string)
+	StartNewUpload(string)
+	DoneUpload(string)
 	CanShutdown() bool
 	StartReceivingRequest()
 	StopReceivingRequest()
@@ -38,7 +38,7 @@ func NewShutdownManage() GracefulTUSManager {
 	}
 }
 
-func (s *GracefulManager) StartNewTUS(id string) {
+func (s *GracefulManager) StartNewUpload(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Println("Add id to map")
@@ -47,7 +47,7 @@ func (s *GracefulManager) StartNewTUS(id string) {
 	fmt.Println(string(bs))
 }
 
-func (s *GracefulManager) DoneTUS(id string) {
+func (s *GracefulManager) DoneUpload(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Println("Remove id to map")
