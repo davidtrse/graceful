@@ -16,7 +16,7 @@ type GracefulShutDownManage interface {
 	CanShutdown() bool
 	StartReceiveRequest()
 	StopReceiveRequest()
-	IsAcceptingRequestStopped() bool
+	IsAcceptingRequest() bool
 	EchoMiddleware() echo.MiddlewareFunc
 }
 
@@ -70,7 +70,7 @@ func (s *GracefulManager) StopReceiveRequest() {
 	s.acceptRequest = false
 }
 
-func (s *GracefulManager) IsAcceptingRequestStopped() bool {
+func (s *GracefulManager) IsAcceptingRequest() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.acceptRequest

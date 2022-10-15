@@ -57,8 +57,8 @@ func Run() {
 		NotifyCreatedUploads:  true,
 		PreUploadCreateCallback: func(hook tusd.HookEvent) error {
 			fmt.Println("PreUploadCreateCallback")
-			fmt.Println("PreUploadCreateCallback:  IsAcceptingRequestStopped ====>", app.Instance.GracefulShutDownManage.IsAcceptingRequestStopped())
-			if !app.Instance.GracefulShutDownManage.IsAcceptingRequestStopped() {
+			fmt.Println("PreUploadCreateCallback:  IsAcceptingRequestStopped ====>", app.Instance.GracefulShutDownManage.IsAcceptingRequest())
+			if !app.Instance.GracefulShutDownManage.IsAcceptingRequest() {
 				return tusd.NewHTTPError(errors.New("server not available"), http.StatusServiceUnavailable)
 			}
 			return nil
