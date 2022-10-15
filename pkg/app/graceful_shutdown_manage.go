@@ -10,13 +10,18 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type GracefulShutDownManage interface {
+const (
+	tusEndpoint = "files"
+	tusParam    = "fileID"
+)
+
+type GracefulTUSManager interface {
 	StartNewTUS(string)
 	DoneTUS(string)
 	CanShutdown() bool
-	StartReceiveRequest()
-	StopReceiveRequest()
-	IsAcceptingRequest() bool
+	StartReceivingRequest()
+	StopReceivingRequest()
+	IsReceivingRequest() bool
 	EchoMiddleware() echo.MiddlewareFunc
 }
 
@@ -26,7 +31,7 @@ type GracefulManager struct {
 	mu            sync.Mutex
 }
 
-func NewShutdownManage() GracefulShutDownManage {
+func NewShutdownManage() GracefulTUSManager {
 	return &GracefulManager{
 		mu:      sync.Mutex{},
 		running: map[string]bool{},
@@ -58,25 +63,25 @@ func (s *GracefulManager) CanShutdown() bool {
 	return len(s.running) == 0
 }
 
-func (s *GracefulManager) StartReceiveRequest() {
+func (s *GracefulManager) StartReceivingRequest() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acceptRequest = true
 }
 
-func (s *GracefulManager) StopReceiveRequest() {
+func (s *GracefulManager) StopReceivingRequest() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acceptRequest = false
 }
 
-func (s *GracefulManager) IsAcceptingRequest() bool {
+func (s *GracefulManager) IsReceivingRequest() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.acceptRequest
 }
 
-func (s *GracefulManager) CanReceiveRequest(id string, isCallTUS bool) bool {
+func (s *GracefulManager) CanReceiveRequest(isCallTUS bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -95,8 +100,8 @@ func (s *GracefulManager) EchoMiddleware() echo.MiddlewareFunc {
 
 			id := c.Param("fileID")
 			fmt.Println("==========>fileID:", id)
-			fmt.Println("==========>s.CanReceiveRequest(id, isCallTUS):", s.CanReceiveRequest(id, isCallTUS))
-			if s.CanReceiveRequest(id, isCallTUS) {
+			fmt.Println("==========>s.CanReceiveRequest(id, isCallTUS):", s.CanReceiveRequest(isCallTUS))
+			if s.CanReceiveRequest(isCallTUS) {
 				return next(c)
 			} else {
 				return c.NoContent(http.StatusServiceUnavailable)

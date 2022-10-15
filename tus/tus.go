@@ -57,8 +57,8 @@ func Run() {
 		NotifyCreatedUploads:  true,
 		PreUploadCreateCallback: func(hook tusd.HookEvent) error {
 			fmt.Println("PreUploadCreateCallback")
-			fmt.Println("PreUploadCreateCallback:  IsAcceptingRequestStopped ====>", app.Instance.GracefulShutDownManage.IsAcceptingRequest())
-			if !app.Instance.GracefulShutDownManage.IsAcceptingRequest() {
+			fmt.Println("PreUploadCreateCallback:  IsAcceptingRequestStopped ====>", app.Instance.GracefulTUSManager.IsReceivingRequest())
+			if !app.Instance.GracefulTUSManager.IsReceivingRequest() {
 				return tusd.NewHTTPError(errors.New("server not available"), http.StatusServiceUnavailable)
 			}
 			return nil
@@ -78,7 +78,7 @@ func Run() {
 		for {
 			event := <-handler.CreatedUploads
 			fmt.Printf("Upload %s created\n", event.Upload.ID)
-			app.Instance.GracefulShutDownManage.StartNewTUS(event.Upload.ID)
+			app.Instance.GracefulTUSManager.StartNewTUS(event.Upload.ID)
 		}
 	}()
 
@@ -89,13 +89,13 @@ func Run() {
 		for {
 			event := <-handler.CompleteUploads
 			fmt.Printf("Upload %s finished\n", event.Upload.ID)
-			app.Instance.GracefulShutDownManage.DoneTUS(event.Upload.ID)
+			app.Instance.GracefulTUSManager.DoneTUS(event.Upload.ID)
 		}
 	}()
 
 	e := echo.New()
-	app.Instance.GracefulShutDownManage.StartReceiveRequest()
-	e.Use(app.Instance.GracefulShutDownManage.EchoMiddleware())
+	app.Instance.GracefulTUSManager.StartReceivingRequest()
+	e.Use(app.Instance.GracefulTUSManager.EchoMiddleware())
 
 	cors := middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
@@ -153,10 +153,10 @@ d:
 		case <-isOSExist:
 			isOk <- true
 			fmt.Println("====> Graceful shutting down...")
-			app.Instance.GracefulShutDownManage.StopReceiveRequest()
+			app.Instance.GracefulTUSManager.StopReceivingRequest()
 		case <-isOk:
-			if app.Instance.GracefulShutDownManage.CanShutdown() {
-				fmt.Println("====> GracefulShutDownManage.IsDone=true...")
+			if app.Instance.GracefulTUSManager.CanShutdown() {
+				fmt.Println("====> GracefulTUSManager.IsDone=true...")
 				quitChan <- true
 				break d
 			} else {
@@ -180,7 +180,7 @@ d:
 
 func Init() {
 	app.Instance = &app.Context{
-		GracefulShutDownManage: app.NewShutdownManage(),
+		GracefulTUSManager: app.NewShutdownManage(),
 	}
 }
 

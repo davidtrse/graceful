@@ -5,6 +5,6 @@ import "github.com/davidtrse/graceful/kafkas"
 var Instance *Context
 
 type Context struct {
-	KafkaManager           kafkas.IKafkaManager
-	GracefulShutDownManage GracefulShutDownManage
+	KafkaManager       kafkas.IKafkaManager
+	GracefulTUSManager GracefulTUSManager
 }
