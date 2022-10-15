@@ -14,12 +14,20 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+var (
+	ErrContextClosed = errors.New("closed. Can not read more message")
+)
+
 type IKafkaManager interface {
 	CreateReader()
 	CreateWriter()
 	ReadMessage(topic string) (kafka.Message, error)
 	WriteMessage(topic string, key []byte, value []byte) error
 	WriteMessageWithHeader(topic string, key []byte, value []byte, headerName string, headerValue string) error
+	Start()
+	Done()
+	IsDone() bool
+	Close()
 	StopReadMessage()
 	StopWriteMessage()
 }
@@ -33,14 +41,15 @@ func IsNotEmpty(msg kafka.Message) bool {
 }
 
 type KafkaManager struct {
-	Config     *KafkaConfig
-	Context    context.Context
-	CancelFunc context.CancelFunc
-	Brokers    []string
-	Topics     []string
-	GroupId    string
-	Readers    map[string]*kafka.Reader
-	Writer     *kafka.Writer
+	Config   *KafkaConfig
+	Context  context.Context
+	IsClosed bool
+	Brokers  []string
+	Topics   []string
+	GroupId  string
+	Readers  map[string]*kafka.Reader
+	Writer   *kafka.Writer
+	Keeping  bool
 }
 
 var (
@@ -78,9 +87,9 @@ func NewKafkaManager(kConfig *KafkaConfig) (*KafkaManager, error) {
 		log.Errorf("NewKafkaManager: No topics in configuration file.")
 		return nil, errors.New("No topics")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	km.Context = ctx
-	km.CancelFunc = cancel
+	// ctx, cancel := context.WithCancel(context.Background())
+	// km.Context = ctx
+	// km.CancelFunc = cancel
 	//km.createReaderWriters()dad
 
 	return km, nil
@@ -131,6 +140,10 @@ func (this *KafkaManager) ReadMessage(topic string) (kafka.Message, error) {
 		}
 	}()
 
+	if this.IsClosed {
+		return kafka.Message{}, ErrContextClosed
+	}
+
 	if topic != "" {
 		msg, err := this.readMessageWithTimeout(this.Context, this.Readers[topic], time.Second*1)
 		if err == nil {
@@ -148,11 +161,11 @@ func (this *KafkaManager) ReadMessage(topic string) (kafka.Message, error) {
 				fmt.Printf("ReadMessageByPriority: Got message from topic: %s \n", topic)
 				return msg, nil
 			} else {
-				fmt.Printf("ReadMessageByPriority: no message\n")
-				fmt.Printf("ReadMessageByPriority:err=%s\n", err.Error())
 				if err == io.EOF {
 					return kafka.Message{}, io.EOF
 				}
+
+				fmt.Printf("ReadMessageByPriority: no message\n")
 			}
 		}
 		return kafka.Message{}, nil
@@ -197,6 +210,23 @@ func (this *KafkaManager) StopReadMessage() {
 		this.Readers = nil
 	}
 }
+
+func (this *KafkaManager) Close() {
+	this.IsClosed = true
+}
+
+func (this *KafkaManager) Start() {
+	this.Keeping = true
+}
+
+func (this *KafkaManager) Done() {
+	this.Keeping = false
+}
+
+func (this *KafkaManager) IsDone() bool {
+	return !this.Keeping
+}
+
 func logf(msg string, a ...interface{}) {
 	log.Infof("kafka: "+msg, a...)
 }

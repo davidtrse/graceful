@@ -12,7 +12,7 @@ import (
 	"github.com/labstack/gommon/log"
 )
 
-func Run() {
+func Simple() {
 	delayTime := 10
 
 	quit := make(chan bool, 1)

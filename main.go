@@ -3,5 +3,5 @@ package main
 import "github.com/davidtrse/graceful/server"
 
 func main() {
-	server.Start()
+	server.Kafka()
 }

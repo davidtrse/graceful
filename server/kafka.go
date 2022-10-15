@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,17 +15,17 @@ import (
 	"github.com/labstack/gommon/log"
 )
 
-func Start() {
+func Kafka() {
 	quit := make(chan bool, 1)
 	isTranscodeDone := make(chan bool, 1)
 	keepRunning := make(chan bool, 1)
+
 	InitKafka()
 	go mainLoop(isTranscodeDone, keepRunning)
 
 	// catch the signal
 	existOSsignal := make(chan os.Signal, 1)
 	signal.Notify(existOSsignal, syscall.SIGINT, syscall.SIGTERM)
-	ctx, cancel := context.WithCancel(context.Background())
 
 	wait := make(chan bool, 1)
 d:
@@ -33,36 +34,22 @@ d:
 		case <-existOSsignal:
 			wait <- true
 			fmt.Println("shutting down...")
+			app.Instance.KafkaManager.Close()
 			app.Instance.KafkaManager.StopReadMessage()
 		case <-wait:
-			select {
-			case <-isTranscodeDone:
-				fmt.Println("isTranscodeDone=true...")
+			if app.Instance.KafkaManager.IsDone() {
 				quit <- true
 				break d
-			case <-ctx.Done():
-				quit <- true
-				fmt.Println("ctx.Done=true...")
-				break d
-			case <-keepRunning:
-				fmt.Println("keepRunning=true...")
-				keepRunning <- true
+			} else {
 				wait <- true
-			default:
-				fmt.Println("wait=true...")
-				quit <- true
-				break d
 			}
-		default:
-			fmt.Println("inprogress...")
 		}
 		time.Sleep(1 * time.Second)
 	}
 
 	<-quit
-	fmt.Println("Quit")
-	cancel()
 	app.Instance.KafkaManager.StopWriteMessage()
+	fmt.Println("Server exited.")
 }
 
 func InitKafka() {
@@ -72,6 +59,7 @@ func InitKafka() {
 		Topics:  "topic-test",
 	})
 
+	km.Context = context.Background()
 	if err != nil {
 		log.Fatalf("Failed to create Kafka manager: %s", err.Error())
 	}
@@ -91,24 +79,33 @@ func mainLoop(isTranscodeDone chan bool, keepRunning chan bool) {
 				break
 			}
 
+			if errors.Is(err, kafkas.ErrContextClosed) {
+				fmt.Println("Context done! Reader is closed")
+				break
+			}
+
 			log.Error("Failed on reading msg")
 			continue
 		}
+		app.Instance.KafkaManager.Start()
+		// if receive message is "Slow", will sleep 30 second while loop and print 0-29
+		if string(msg.Value) == "Slow" {
+			fmt.Println("Slow.....")
 
-		// if receive message is "Big", will sleep 5 second while loop and print 1-5
-		if string(msg.Value) == "Big" {
-			keepRunning <- true
-			fmt.Println("Big.....")
-			for i := 0; i < 5; i++ {
-				fmt.Println(i)
+			for i := 0; i < 30; i++ {
+				fmt.Printf("Slow: %d\n", i)
 				time.Sleep(1 * time.Second)
 			}
-			isTranscodeDone <- true
 		} else {
 			fmt.Printf("Message: msg=%s \n", string(msg.Value))
+			for i := 0; i < 2; i++ {
+				fmt.Printf("Fast: %d\n", i)
+				time.Sleep(1 * time.Second)
+			}
 			if kafkas.IsNotEmpty(msg) {
 				fmt.Println("msg not empty..")
 			}
 		}
+		app.Instance.KafkaManager.Done()
 	}
 }
