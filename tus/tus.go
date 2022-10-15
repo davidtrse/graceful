@@ -2,14 +2,18 @@ package tus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/davidtrse/graceful/pkg/app"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/lib/pq"
@@ -24,8 +28,7 @@ const (
 )
 
 func Run() {
-	isTUSDone := make(chan bool, 1)
-	isTUSProcessing := make(chan bool, 1)
+	Init()
 
 	log.Println("TUS Server started")
 	// Create a new FileStore instance which is responsible for
@@ -51,18 +54,33 @@ func Run() {
 		BasePath:              "/files/",
 		StoreComposer:         composer,
 		NotifyCompleteUploads: true,
+		NotifyCreatedUploads:  true,
 		PreUploadCreateCallback: func(hook tusd.HookEvent) error {
-			isTUSProcessing <- true
+			fmt.Println("PreUploadCreateCallback")
+			fmt.Println("PreUploadCreateCallback:  IsAcceptingRequestStopped ====>", app.Instance.GracefulShutDownManage.IsAcceptingRequestStopped())
+			if !app.Instance.GracefulShutDownManage.IsAcceptingRequestStopped() {
+				return tusd.NewHTTPError(errors.New("server not available"), http.StatusServiceUnavailable)
+			}
 			return nil
 		},
 		PreFinishResponseCallback: func(hook tusd.HookEvent) error {
-			fmt.Println("Pre-create create handler success")
+			fmt.Println("Pre-finish create handler success")
 			return nil
 		},
 	})
 	if err != nil {
 		panic(fmt.Errorf("Unable to create handler: %s", err))
 	}
+
+	/// Start another goroutine for receiving events from the handler whenever
+	// an upload is created.
+	go func() {
+		for {
+			event := <-handler.CreatedUploads
+			fmt.Printf("Upload %s created\n", event.Upload.ID)
+			app.Instance.GracefulShutDownManage.StartNewTUS(event.Upload.ID)
+		}
+	}()
 
 	// Start another goroutine for receiving events from the handler whenever
 	// an upload is completed. The event will contains details about the upload
@@ -71,11 +89,13 @@ func Run() {
 		for {
 			event := <-handler.CompleteUploads
 			fmt.Printf("Upload %s finished\n", event.Upload.ID)
-			isTUSDone <- true
+			app.Instance.GracefulShutDownManage.DoneTUS(event.Upload.ID)
 		}
 	}()
 
 	e := echo.New()
+	app.Instance.GracefulShutDownManage.StartReceiveRequest()
+	e.Use(app.Instance.GracefulShutDownManage.EchoMiddleware())
 
 	cors := middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
@@ -98,12 +118,12 @@ func Run() {
 	})
 	e.Use(cors)
 
-	e.OPTIONS("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.ServeHTTP)), echo.WrapMiddleware(tusmiddleware))
 	e.POST("/files", echo.WrapHandler(http.HandlerFunc(handler.PostFile)), echo.WrapMiddleware(tusmiddleware))
 	e.HEAD("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.HeadFile)), echo.WrapMiddleware(tusmiddleware))
 	e.PATCH("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.PatchFile)), echo.WrapMiddleware(tusmiddleware))
 	e.GET("/files/:fileID", echo.WrapHandler(http.HandlerFunc(handler.GetFile)))
 	e.GET("/", hello)
+	e.GET("/l", helloSlow)
 	// Start server in dedicated go routine
 	go func() {
 		if err := e.Start(":8180"); err != nil {
@@ -132,40 +152,21 @@ d:
 		select {
 		case <-isOSExist:
 			isOk <- true
+			fmt.Println("====> Graceful shutting down...")
+			app.Instance.GracefulShutDownManage.StopReceiveRequest()
 		case <-isOk:
-			select {
-			case <-isTUSProcessing:
-				select {
-				case <-isTUSDone:
-					fmt.Println("isTUSDone=true")
-					quitChan <- true
-					break d
-				default:
-					isTUSProcessing <- true
-					isOk <- true
-				}
-			default:
-				fmt.Println("isOSExisting=true")
+			if app.Instance.GracefulShutDownManage.CanShutdown() {
+				fmt.Println("====> GracefulShutDownManage.IsDone=true...")
 				quitChan <- true
 				break d
+			} else {
+				isOk <- true
+				fmt.Println("====> Graceful shutting down...")
+				time.Sleep(1 * time.Second)
 			}
-		case a, ok := <-isTUSProcessing:
-			if ok {
-				fmt.Println("isTUSProcessing", a)
-			}
-		case a, ok := <-isTUSDone:
-			if ok {
-				fmt.Println("isTUSDone", a)
-			}
-		default:
-			fmt.Println("inprogress...")
 		}
-
-		time.Sleep(1 * time.Second)
 	}
-
 	<-quitChan
-	fmt.Println("====> Graceful shutdowning...")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -177,12 +178,33 @@ d:
 	}
 }
 
+func Init() {
+	app.Instance = &app.Context{
+		GracefulShutDownManage: app.NewShutdownManage(),
+	}
+}
+
 func hello(echo echo.Context) error {
-	for i := 0; i < 10; i++ {
+	s1 := rand.NewSource(time.Now().UnixNano())
+	r1 := rand.New(s1)
+
+	for i := 0; i < 1; i++ {
 		fmt.Println(i)
 		time.Sleep(1 * time.Second)
 	}
-	echo.Response().Write([]byte("Ok"))
+	echo.Response().Write([]byte(strconv.Itoa(r1.Intn(100))))
+	return nil
+}
+
+func helloSlow(echo echo.Context) error {
+	s1 := rand.NewSource(time.Now().UnixNano())
+	r1 := rand.New(s1)
+
+	for i := 0; i < 15; i++ {
+		fmt.Println(i)
+		time.Sleep(1 * time.Second)
+	}
+	echo.Response().Write([]byte(strconv.Itoa(r1.Intn(100))))
 	return nil
 }
 

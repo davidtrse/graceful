@@ -29,17 +29,11 @@ func Simple() {
 	e.Logger.SetLevel(log.INFO)
 	e.GET("/", func(c echo.Context) error {
 		// Printout each second
-		go func(tusDone chan bool) {
-			for i := 0; i < delayTime+4; i++ {
-				fmt.Println(i)
-				time.Sleep(1 * time.Second)
-			}
+		for i := 0; i < delayTime+4; i++ {
+			fmt.Println(i)
+			time.Sleep(1 * time.Second)
+		}
 
-			tusDone <- true
-		}(tusDone)
-		// END printout each second
-
-		time.Sleep(time.Duration(delayTime) * time.Second)
 		fmt.Println("OK")
 		return c.JSON(http.StatusOK, "OK")
 	})
