@@ -27,6 +27,13 @@ Expected:
 2. Server should be exited after the upload is successful.
 
 # GRACEFUL KAFKA
+### Acceptance criteria
+That make sure: 
+1. Shutdown server without effect to subribe or write message
+2. Do not receive new message as soon as send shutdown signal.
+3. Only shutdown server after the current transcode success.
+
+### Run as demo
 1. Run kafka container via docker-compose: 
 `$ make up`
 2. Create topic name is `topic-test` to test
