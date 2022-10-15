@@ -33,7 +33,7 @@ d:
 		case <-existOSsignal:
 			wait <- true
 			fmt.Println("shutting down...")
-			app.Instance.KafkaManager.StopConsumer()
+			app.Instance.KafkaManager.StopReadMessage()
 		case <-wait:
 			select {
 			case <-isTranscodeDone:
