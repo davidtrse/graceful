@@ -3,12 +3,11 @@ package kafkas
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 
-	"os"
-	"os/signal"
 	"runtime/debug"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/labstack/gommon/log"
@@ -21,6 +20,8 @@ type IKafkaManager interface {
 	ReadMessage(topic string) (kafka.Message, error)
 	WriteMessage(topic string, key []byte, value []byte) error
 	WriteMessageWithHeader(topic string, key []byte, value []byte, headerName string, headerValue string) error
+	StopConsumer()
+	StopWriteMessage()
 }
 
 func IsEmptyMessage(msg kafka.Message) bool {
@@ -80,36 +81,7 @@ func NewKafkaManager(kConfig *KafkaConfig) (*KafkaManager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	km.Context = ctx
 	km.CancelFunc = cancel
-
-	//km.createReaderWriters()
-
-	// catch the signal
-	existChan := make(chan os.Signal, 1)
-	signal.Notify(existChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-	d:
-		for {
-			isOk := make(chan bool, 1)
-
-			select {
-			case <-existChan:
-				isOk <- true
-				log.Infof("KafkaManger: received signal, shutting down...")
-			case <-isOk:
-				select {
-				case <-km.Context.Done():
-					km.Shutdown()
-					os.Exit(1)
-					break d
-				default:
-					log.Infof("isOk=true...")
-
-					<-isOk
-				}
-			default:
-			}
-		}
-	}()
+	//km.createReaderWriters()dad
 
 	return km, nil
 }
@@ -160,22 +132,27 @@ func (this *KafkaManager) ReadMessage(topic string) (kafka.Message, error) {
 	}()
 
 	if topic != "" {
-		msg, err := this.readMessageWithTimeout(this.Context, this.Readers[topic], time.Millisecond*5000)
+		msg, err := this.readMessageWithTimeout(this.Context, this.Readers[topic], time.Second*1)
 		if err == nil {
-			log.Debugf("ReadMessageByPriority: Got message from topic: %s ", topic)
+			fmt.Printf("ReadMessageByPriority: Got message from topic: %s \n", topic)
 			return msg, nil
 		} else {
-			log.Infof("ReadMessageByPriority: no message on topic: %s", topic)
+			fmt.Printf("ReadMessageByPriority: no message on topic: %s \n", topic)
 			return kafka.Message{}, nil
 		}
 	} else {
 		for _, topic := range this.Topics {
-			msg, err := this.readMessageWithTimeout(this.Context, this.Readers[topic], time.Millisecond*5000)
+			msg, err := this.readMessageWithTimeout(this.Context, this.Readers[topic], time.Second*1)
+			fmt.Println("Readed more message")
 			if err == nil {
-				log.Debugf("ReadMessageByPriority: Got message from topic: %s ", topic)
+				fmt.Printf("ReadMessageByPriority: Got message from topic: %s \n", topic)
 				return msg, nil
 			} else {
-				log.Debugf("ReadMessageByPriority: no message on topic: %s", topic)
+				fmt.Printf("ReadMessageByPriority: no message\n")
+				fmt.Printf("ReadMessageByPriority:err=%s\n", err.Error())
+				if err == io.EOF {
+					return kafka.Message{}, io.EOF
+				}
 			}
 		}
 		return kafka.Message{}, nil
@@ -203,21 +180,23 @@ func (this *KafkaManager) WriteMessageWithHeader(topic string, key []byte, value
 	return err
 }
 
-func (this *KafkaManager) Shutdown() {
-
-	if this.Readers != nil {
-		for _, r := range this.Readers {
-			r.Close()
-		}
-		this.Readers = nil
-	}
-
+func (this *KafkaManager) StopWriteMessage() {
 	if this.Writer != nil {
+		fmt.Println("StopWriteMessage...")
 		this.Writer.Close()
 		this.Writer = nil
 	}
 }
 
+func (this *KafkaManager) StopConsumer() {
+	if this.Readers != nil {
+		for _, r := range this.Readers {
+			fmt.Println("StopConsumer...")
+			r.Close()
+		}
+		this.Readers = nil
+	}
+}
 func logf(msg string, a ...interface{}) {
 	log.Infof("kafka: "+msg, a...)
 }

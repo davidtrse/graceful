@@ -97,7 +97,7 @@ func (lb *LeastSize) Balance(msg k.Message, partitions ...int) int {
 
 	c := &lb.counters[minIndex]
 	c.bytes += sizeHeader
-	log.Debugf("topic: %s, size: %d, partition: %d", msg.Topic, sizeHeader, c.partition)
+	log.Infof("topic: %s, size: %d, partition: %d", msg.Topic, sizeHeader, c.partition)
 	return c.partition
 }
 
