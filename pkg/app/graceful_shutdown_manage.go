@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -43,17 +42,12 @@ func (s *GracefulManager) StartNewUpload(id string) {
 	defer s.mu.Unlock()
 	fmt.Println("Add id to map")
 	s.running[id] = true
-	bs, _ := json.Marshal(s.running)
-	fmt.Println(string(bs))
 }
 
 func (s *GracefulManager) DoneUpload(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Println("Remove id to map")
 	delete(s.running, id)
-	bs, _ := json.Marshal(s.running)
-	fmt.Println(string(bs))
 }
 
 func (s *GracefulManager) CanShutdown() bool {

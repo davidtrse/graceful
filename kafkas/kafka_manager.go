@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"runtime/debug"
 	"strings"
@@ -24,8 +25,8 @@ type IKafkaManager interface {
 	ReadMessage(topic string) (kafka.Message, error)
 	WriteMessage(topic string, key []byte, value []byte) error
 	WriteMessageWithHeader(topic string, key []byte, value []byte, headerName string, headerValue string) error
-	Start()
-	Done()
+	StartNewTranscode(id string)
+	DoneTranscode(id string)
 	IsDone() bool
 	Close()
 	StopReadMessage()
@@ -41,30 +42,23 @@ func IsNotEmpty(msg kafka.Message) bool {
 }
 
 type KafkaManager struct {
-	Config  *KafkaConfig
-	Context context.Context
-	Brokers []string
-	Topics  []string
-	GroupId string
-	Readers map[string]*kafka.Reader
-	Writer  *kafka.Writer
-	// IsClosed was setted as soon as receiving terminated signal
+	Config     *KafkaConfig
+	Context    context.Context
+	CancelFunc context.CancelFunc
+	Brokers    []string
+	Topics     []string
+	GroupId    string
+	Readers    map[string]*kafka.Reader
+	Writer     *kafka.Writer
+	// isClosed was setted as soon as receiving terminated signal
 	// Do not read more message if IsClose equal true
-	IsClosed bool
+	isClosed bool
 
-	// KeepRunning was setted as soon as start new transcode times
+	mu sync.Mutex
+	// keepRunning was setted as soon as start new transcode times
 	// and reverted after the new message was processed.
-	// KeepRunning be used to whether can stop transcode service or not
-	KeepRunning bool
-}
-
-var (
-	kafkaManagers map[string]*KafkaManager
-	err           error
-)
-
-func GetKafkaManager(topic string) *KafkaManager {
-	return kafkaManagers[topic]
+	// keepRunning be used to check whether can stop transcode service or not
+	keepRunning map[string]bool
 }
 
 func (this *KafkaManager) loadKafkaConfig() error {
@@ -83,8 +77,11 @@ func (this *KafkaManager) loadKafkaConfig() error {
 }
 
 func NewKafkaManager(kConfig *KafkaConfig) (*KafkaManager, error) {
-	km := &KafkaManager{Config: kConfig}
-	_ = km.loadKafkaConfig()
+	km := &KafkaManager{
+		Config:      kConfig,
+		keepRunning: map[string]bool{},
+	}
+	err := km.loadKafkaConfig()
 	if err != nil {
 		log.Errorf("NewKafkaManager: Failed to load kafka config, err: %v", err)
 		return nil, err
@@ -93,10 +90,9 @@ func NewKafkaManager(kConfig *KafkaConfig) (*KafkaManager, error) {
 		log.Errorf("NewKafkaManager: No topics in configuration file.")
 		return nil, errors.New("No topics")
 	}
-	// ctx, cancel := context.WithCancel(context.Background())
-	// km.Context = ctx
-	// km.CancelFunc = cancel
-	//km.createReaderWriters()dad
+	ctx, cancel := context.WithCancel(context.Background())
+	km.Context = ctx
+	km.CancelFunc = cancel
 
 	return km, nil
 }
@@ -146,7 +142,7 @@ func (this *KafkaManager) ReadMessage(topic string) (kafka.Message, error) {
 		}
 	}()
 
-	if this.IsClosed {
+	if this.isClosed {
 		return kafka.Message{}, ErrContextClosed
 	}
 
@@ -218,19 +214,29 @@ func (this *KafkaManager) StopReadMessage() {
 }
 
 func (this *KafkaManager) Close() {
-	this.IsClosed = true
+	this.isClosed = true
+	this.CancelFunc()
 }
 
-func (this *KafkaManager) Start() {
-	this.KeepRunning = true
+func (this *KafkaManager) StartNewTranscode(id string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	this.keepRunning[id] = true
 }
 
-func (this *KafkaManager) Done() {
-	this.KeepRunning = false
+func (this *KafkaManager) DoneTranscode(id string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	delete(this.keepRunning, id)
 }
 
 func (this *KafkaManager) IsDone() bool {
-	return !this.KeepRunning
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	return len(this.keepRunning) == 0
 }
 
 func logf(msg string, a ...interface{}) {

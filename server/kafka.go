@@ -17,11 +17,9 @@ import (
 
 func Kafka() {
 	quit := make(chan bool, 1)
-	isTranscodeDone := make(chan bool, 1)
-	keepRunning := make(chan bool, 1)
 
 	InitKafka()
-	go mainLoop(isTranscodeDone, keepRunning)
+	go mainLoop()
 
 	// catch the signal
 	existOSsignal := make(chan os.Signal, 1)
@@ -70,7 +68,7 @@ func InitKafka() {
 	}
 }
 
-func mainLoop(isTranscodeDone chan bool, keepRunning chan bool) {
+func mainLoop() {
 	for {
 		msg, err := app.Instance.KafkaManager.ReadMessage("")
 		if err != nil {
@@ -87,7 +85,7 @@ func mainLoop(isTranscodeDone chan bool, keepRunning chan bool) {
 			log.Error("Failed on reading msg")
 			continue
 		}
-		app.Instance.KafkaManager.Start()
+		app.Instance.KafkaManager.StartNewTranscode(string(msg.Value))
 		// if receive message is "Slow", will sleep 30 second while loop and print 0-29
 		if string(msg.Value) == "Slow" {
 			fmt.Println("Slow.....")
@@ -106,6 +104,6 @@ func mainLoop(isTranscodeDone chan bool, keepRunning chan bool) {
 				fmt.Println("msg not empty..")
 			}
 		}
-		app.Instance.KafkaManager.Done()
+		app.Instance.KafkaManager.DoneTranscode(string(msg.Value))
 	}
 }
