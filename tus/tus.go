@@ -138,7 +138,6 @@ func Run() {
 	// GRACEFUL SHUTDOWN
 	// Wait for interrupt signal to gracefully shutdown the server.
 	// Use a buffered channel to avoid missing signals as recommended for signal.Notify
-	quitChan := make(chan bool, 1)
 	isOSExist := make(chan os.Signal, 1)
 	signal.Notify(
 		isOSExist,
@@ -157,7 +156,6 @@ d:
 		case <-isOk:
 			if app.Instance.GracefulTUSManager.CanShutdown() {
 				fmt.Println("====> GracefulTUSManager.IsDone=true...")
-				quitChan <- true
 				break d
 			} else {
 				isOk <- true
@@ -166,7 +164,6 @@ d:
 			}
 		}
 	}
-	<-quitChan
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -16,7 +16,6 @@ import (
 )
 
 func Kafka() {
-	quit := make(chan bool, 1)
 
 	InitKafka()
 	go mainLoop()
@@ -36,7 +35,6 @@ d:
 			app.Instance.KafkaManager.StopReadMessage()
 		case <-wait:
 			if app.Instance.KafkaManager.IsDone() {
-				quit <- true
 				break d
 			} else {
 				wait <- true
@@ -45,7 +43,6 @@ d:
 		time.Sleep(1 * time.Second)
 	}
 
-	<-quit
 	app.Instance.KafkaManager.StopWriteMessage()
 	fmt.Println("Server exited.")
 }
