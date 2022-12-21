@@ -1,8 +1,8 @@
 package main
 
-import "github.com/davidtrse/graceful/server"
+import "github.com/davidtrse/graceful/tus"
 
 func main() {
-	server.Kafka()
-	// tus.Run()
+	// server.Kafka()
+	tus.Run()
 }
