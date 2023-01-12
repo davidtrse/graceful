@@ -1,16 +1,30 @@
+x-logging:
+  &default-logging
+  driver: loki
+  options:
+    loki-url: 'http://localhost:3100/api/prom/push'
+    labels: namespace
+    loki-relabel-config: |+
+      - action: replace
+        source_labels: ["namespace","compose_service","app","env"]
+        separator: "/"
+        target_label: job
+      - action: replace
+        source_labels: ["container_name"]
+        target_label: instance
+        
 # https://developer.confluent.io/quickstart/kafka-docker/
 version: '3'
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.0.1
-    container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-
+    networks:
+      - grafana
   broker:
     image: confluentinc/cp-kafka:7.0.1
-    container_name: broker
     ports:
       # To learn about configuring Kafka for access across networks see
       # https://www.confluent.io/blog/kafka-client-cannot-connect-to-broker-on-aws-on-docker-etc/
@@ -25,3 +39,84 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - grafana
+  grafana:
+    image: grafana/grafana:9.2.2
+    volumes:
+      - ./datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./dashboards:/etc/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - 0.0.0.0:3000:3000
+    labels:
+      namespace: monitoring
+    # logging: *default-logging
+    networks:
+      - grafana
+  loki:
+    image: grafana/loki:2.3.0
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+      - -table-manager.retention-period=1d
+      - -table-manager.retention-deletes-enabled=true
+    ports:
+      - "3100:3100"
+    labels:
+      namespace: monitoring
+    networks:
+      - grafana
+  otel-collector:
+    image: otel/opentelemetry-collector:0.61.0
+    command: [ "--config=/etc/otel-collector.yaml" ]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml
+  tempo:
+    image: grafana/tempo:latest
+    volumes:
+      - ./tempo-local.yaml:/etc/tempo.yaml
+      - ./tempo-data:/tmp/tempo
+    command:
+      - --target=all
+      - --storage.trace.backend=local
+      - --storage.trace.local.path=/var/tempo
+      - --auth.enabled=false
+      - --compactor.compaction.block-retention=24h
+    ports:
+      - "8004:80"
+      - "4317:4317" # otlp grpc
+      - "3200:3200" # tempo
+    labels:
+      namespace: monitoring
+    networks:
+      - grafana
+  app:
+    image: test:test
+    ports:
+      - "8180:8180"
+    labels:
+      namespace: monitoring
+      app: gracerful
+      env: prod
+      tier: backend
+    logging: *default-logging
+    networks:
+      - grafana
+  agent:
+    image: grafana/agent
+    command:
+      [
+        "-config.file=/etc/agent/config.yml",
+        "-metrics.wal-directory=/tmp/agent/wal"
+      ]
+    volumes:
+      - ./agent-config.yml:/etc/agent/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - grafana
+networks:
+  grafana:

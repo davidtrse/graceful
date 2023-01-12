@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -13,13 +12,25 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/davidtrse/graceful/log"
 	"github.com/davidtrse/graceful/pkg/app"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/lib/pq"
-
 	"github.com/tus/tusd/pkg/filestore"
 	tusd "github.com/tus/tusd/pkg/handler"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/credentials"
 )
 
 const (
@@ -27,9 +38,14 @@ const (
 	dirName = "tusSave"
 )
 
+var (
+	tracer = otel.Tracer("app_or_package_name")
+)
+
 func Run() {
 	Init()
-
+	shutdown := configureStdout(context.Background())
+	defer shutdown()
 	log.Println("TUS Server started")
 	// Create a new FileStore instance which is responsible for
 	// storing the uploaded file on disk in the specified directory.
@@ -65,6 +81,7 @@ func Run() {
 		},
 		PreFinishResponseCallback: func(hook tusd.HookEvent) error {
 			fmt.Println("Pre-finish create handler success")
+
 			return nil
 		},
 	})
@@ -99,22 +116,7 @@ func Run() {
 
 	cors := middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
-		// AllowMethods: []string{
-		// 	http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete,
-		// 	http.MethodPatch, http.MethodHead, http.MethodOptions},
-		// AllowHeaders: []string{
-		// 	echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept,
-		// 	echo.HeaderAuthorization, echo.HeaderAccessControlExposeHeaders,
-		// 	"Location", "X-Requested-With", "X-Request-ID",
-		// 	"X-HTTP-Method-Override", "Upload-Defer-Length",
-		// 	"Tus-Resumable", "Tus-Max-Size", "Tus-Extension",
-		// 	"upload-length", "upload-metadata", "upload-offset",
-		// 	"upload-concat", "Redirect"},
-		// ExposeHeaders: []string{
-		// 	"Upload-Offset", "Location", "Upload-Length", "Tus-Version",
-		// 	"Tus-Resumable", "Tus-Max-Size", "Tus-Extension", "Upload-Metadata",
-		// 	"Upload-Defer-Length", "Upload-Concat"},
-		MaxAge: 3600,
+		MaxAge:       3600,
 	})
 	e.Use(cors)
 
@@ -181,15 +183,28 @@ func Init() {
 	}
 }
 
-func hello(echo echo.Context) error {
+func hello(c echo.Context) error {
+	// Each execution of the run loop, we should get a new "root" span and context.
+	ctx, span := tracer.Start(c.Request().Context(), "hello", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
 	s1 := rand.NewSource(time.Now().UnixNano())
 	r1 := rand.New(s1)
 
-	for i := 0; i < 1; i++ {
-		fmt.Println(i)
-		time.Sleep(1 * time.Second)
+	log.Infoff(ctx, "hello spanId=%s", span.SpanContext().SpanID())
+	log.Infoff(ctx, "hello span_id=%s", span.SpanContext().SpanID())
+	log.Infoff(ctx, "hello trace_id=%s", span.SpanContext().TraceID())
+
+	bag := baggage.FromContext(ctx)
+
+	serverAttribute := attribute.String("server-attribute", "foo")
+	var baggageAttributes []attribute.KeyValue
+	baggageAttributes = append(baggageAttributes, serverAttribute)
+	for _, member := range bag.Members() {
+		baggageAttributes = append(baggageAttributes, attribute.String("baggage key:"+member.Key(), member.Value()))
 	}
-	echo.Response().Write([]byte(strconv.Itoa(r1.Intn(100))))
+	span.SetAttributes(baggageAttributes...)
+
+	c.Response().Write([]byte(strconv.Itoa(r1.Intn(100))))
 	return nil
 }
 
@@ -255,4 +270,50 @@ func tusmiddleware(h http.Handler) http.Handler {
 		// Proceed with routing the request
 		h.ServeHTTP(w, r)
 	})
+}
+
+func configureStdout(ctx context.Context) func() {
+	configGrpcInsecure := false
+	secureOption := otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, ""))
+	if configGrpcInsecure {
+		secureOption = otlptracegrpc.WithInsecure()
+	}
+
+	configCollectorURL := "otel-collector:4317"
+	exporter, _ := otlptrace.New(
+		context.Background(),
+		otlptracegrpc.NewClient(
+			secureOption,
+			otlptracegrpc.WithEndpoint(configCollectorURL),
+		),
+	)
+
+	// span processor
+	exp, _ := stdouttrace.New(stdouttrace.WithPrettyPrint())
+
+	batchSpanProcessor := sdktrace.NewBatchSpanProcessor(exp)
+	// trace provider
+	configName := "monitoring"
+	configInstanceId := "23"
+	keyEnv := "minh-key"
+	configEnv := "dev"
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String(configName),
+			semconv.ServiceInstanceIDKey.String(configInstanceId),
+			attribute.String(keyEnv, configEnv),
+		)),
+		sdktrace.WithSpanProcessor(batchSpanProcessor),
+		sdktrace.WithBatcher(exporter),
+	)
+	// set global propagator to tracecontext (the default is no-op).
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	otel.SetTracerProvider(provider)
+
+	return func() {
+		if err := provider.Shutdown(ctx); err != nil {
+			panic(err)
+		}
+	}
 }

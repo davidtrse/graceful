@@ -1,0 +1,38 @@
+# logs:
+#   configs:
+#   - name: default
+#     positions:
+#       filename: /tmp/positions.yaml
+#     clients:
+#       - url: http://loki:3100/loki/api/v1/push
+#     scrape_configs:
+#     - job_name: dockerd
+#       docker_sd_configs:
+#         - host: unix:///var/run/docker.sock
+#           refresh_interval: 5s
+#       relabel_configs:
+#         - source_labels: ['__meta_docker_container_name']
+#           regex: '/(.*)'
+#           target_label: 'container'
+
+# metrics:
+#   wal_directory: /tmp/grafana-agent/wal
+#   configs:
+#     - name: agent
+#       scrape_configs:
+#         - job_name: agent
+#           static_configs:
+#             - targets: ["app:1323"]
+#       remote_write:
+#         - url: http://mimir:9009/api/v1/push
+
+traces:
+  configs:
+  - name: default
+    remote_write:
+      - endpoint: tempo:4317
+        insecure: true
+    receivers:
+      jaeger:
+        protocols:
+          thrift_http:
