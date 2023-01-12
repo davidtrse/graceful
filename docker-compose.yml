@@ -12,7 +12,7 @@ x-logging:
       - action: replace
         source_labels: ["container_name"]
         target_label: instance
-        
+
 # https://developer.confluent.io/quickstart/kafka-docker/
 version: '3'
 services:
