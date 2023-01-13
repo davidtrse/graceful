@@ -94,15 +94,13 @@ services:
       namespace: monitoring
     networks:
       - grafana
+    logging: *default-logging
   app:
     image: test:test
     ports:
       - "8180:8180"
     labels:
       namespace: monitoring
-      app: gracerful
-      env: prod
-      tier: backend
     logging: *default-logging
     networks:
       - grafana

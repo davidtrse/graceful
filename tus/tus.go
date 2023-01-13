@@ -39,7 +39,7 @@ const (
 )
 
 var (
-	tracer = otel.Tracer("app_or_package_name")
+	tracer = otel.Tracer("tus")
 )
 
 func Run() {
@@ -279,7 +279,7 @@ func configureStdout(ctx context.Context) func() {
 		secureOption = otlptracegrpc.WithInsecure()
 	}
 
-	configCollectorURL := "otel-collector:4317"
+	configCollectorURL := "tempo:4317"
 	exporter, _ := otlptrace.New(
 		context.Background(),
 		otlptracegrpc.NewClient(
@@ -293,16 +293,11 @@ func configureStdout(ctx context.Context) func() {
 
 	batchSpanProcessor := sdktrace.NewBatchSpanProcessor(exp)
 	// trace provider
-	configName := "monitoring"
-	configInstanceId := "23"
-	keyEnv := "minh-key"
-	configEnv := "dev"
+	configName := "gracefulService"
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
 			semconv.ServiceNameKey.String(configName),
-			semconv.ServiceInstanceIDKey.String(configInstanceId),
-			attribute.String(keyEnv, configEnv),
 		)),
 		sdktrace.WithSpanProcessor(batchSpanProcessor),
 		sdktrace.WithBatcher(exporter),
